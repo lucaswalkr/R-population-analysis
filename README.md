@@ -14,4 +14,4 @@ Data have been collected between 1980 and 2020 on the masses of individuals (in 
 
 # Files
 - sheep_body_mass_code.Rmd: All the code required for statistical analysis of the sheep data
-- markdown.html: An HTML file of the Rmarkdown document, open in browser using a PDF viewer
+- markdown.html: An HTML file of the Rmarkdown document
