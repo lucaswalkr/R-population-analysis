@@ -1,0 +1,479 @@
+---
+title: "**Programming in R** <br> Coursework:  <br>"
+author: "by Lucas Walker (1930864)"
+
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true    
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(fitdistrplus)
+library(ggpubr)
+library(glmmTMB)
+library(DHARMa)
+library(MuMIn)
+library(bestNormalize)
+library(ggeffects)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Context
+**The main aim** of this analysis is to show which factors in the data determine the body mass of individuals within a population of Soay sheep (*Ovis aries*). 
+
+The **null hypothesis** here is that the 'sNAO' has no significant effect on the mean body mass of Soay sheep.
+
+### Packages used
+```{r eval=TRUE}
+library(tidyverse)
+library(fitdistrplus)
+library(ggpubr)
+library(glmmTMB)
+library(DHARMa)
+library(MuMIn)
+library(bestNormalize)
+library(ggeffects)
+```
+
+# The Data
+
+## Reading data
+
+Data was downloaded from GitHub:  
+- [mass_vq19715.tsv.gz](https://github.com/ExperimentalConservation/R-coursework-data/blob/main/2022/mass_vq19715.tsv.gz) : body mass of sheep  
+- [NAO_vq19715.tsv.gz](https://github.com/ExperimentalConservation/R-coursework-data/blob/main/2022/NAO_vq19715.tsv.gz) : NAO data
+
+```{r, message=FALSE}
+# Firstly, the working directory was set and data was read in.  
+
+# Set working directory to folder where data had been downloaded to
+setwd("C:/Users/vq19715/OneDrive - University of Bristol/Documents/Programming in R/COURSEWORK")
+
+# The function `read_table` was used here as it automatically decompresses the zipped `.gz` files and can read '.tsv' files. 
+
+# Reading in NAO data
+nao_data <- read_table('NAO_vq19715.tsv.gz')
+# Reading in mass data
+mass_data <- read_table("mass_vq19715.tsv.gz")
+```
+
+## Data tidying
+
+### NAO data
+
+```{r}
+# Looking at raw data
+head(nao_data)
+```
+
+Manipulating NAO data:
+```{r}
+# NAO has been recorded monthly whilst the mass data for Soay sheep have been recorded yearly. To compare the NAO data with the mass data, the mean NAO value for each year needs to be calculated. As we're only interested in the summer months the data is filtered to only include June, July and August.
+
+# Creating data frame containing the average recorded summer NAO (nSAO) value for each year
+snao_data <- nao_data %>% 
+  # Filtering for summer months
+  filter(month %in% c("June", "July", "August")) %>%
+  # Grouping values by year
+  group_by(year) %>% 
+  # Calculating the average strength of the sNAO for each year and naming this column 'mean_snao'
+  summarise_at(vars(NAO), list(mean_snao=mean))
+
+# Looking at data
+snao_data
+```
+
+### Mass data
+
+```{r}
+# Looking at mass data
+head(mass_data)
+
+# Checking for NA values, if present these need to be removed to avoid errors.
+sum(is.na(mass_data$weight))
+```
+
+### Combining data
+```{r, message=FALSE}
+# Joining data in full (has done this by year - default)
+snao_mass_data <- full_join(snao_data, mass_data) %>%
+  # Omitting the NA's from the weight column
+  drop_na(weight) %>%
+  # Adding units to weight column
+  rename(weight_kg = weight) %>%
+  # Defining the year, sex, site and number of babies as factors (categorical data)
+  mutate_at(vars(year, sex, site, n_babies), factor) 
+
+```
+
+# Visualising the data
+
+```{r, message=FALSE, fig.cap= "Figure 1. Scatterplot showing  a positive linear relationship between weight and age."}
+# To understand whether there might be a relationship between certain factors and the body mass of Soay sheep, several plots were created. 
+
+# Plotting age (as a categorical variable) against weight 
+age_plot <- ggplot(snao_mass_data, aes(x=as.factor(age), y=weight_kg)) +
+  # Specifying for points
+  geom_point() +
+  # Plotting a linear regression line 
+  geom_smooth(aes(group = 1), size = 1, method= "lm", col="#e76f51", se = TRUE) +
+  # Adding labels 
+  xlab("Age") + ylab("Weight (KG)") +
+  # Setting theme
+  theme_classic() 
+
+# Looking at plot 
+age_plot                                                                               
+```
+
+
+```{r, fig.cap = "Figure 2. Box plot showing no clear relationship between weight and n_babies across 3 sites."}
+# Plotting n_babies against weight 
+babies_plot <- ggplot(snao_mass_data, aes(x=n_babies, y=weight_kg, fill=site)) +
+  # Specifying for box plot
+  geom_boxplot() +
+  # Plotting box plots for each site
+  facet_wrap(~site) +
+  # Setting theme 
+  theme_classic() + 
+  # Specifying colours for each site
+  scale_fill_manual(values=c("#e76f51", "#f4a261", "#e9c46a"))
+
+# Looking at plot
+babies_plot                                                                               
+```
+
+```{r, fig.cap="Figure 3. Box plot showing differences in weight between sexes."}
+# Plotting sex against weight 
+sex_plot <- ggplot(snao_mass_data, aes(x=sex, y=weight_kg, col=sex, fill=sex)) +
+  # Box plot with slight transparency
+  geom_boxplot(alpha=0.8) +
+  # Adding labels
+  xlab("Sex") + ylab("Weight (KG)") +
+  # Changing theme (aest)
+  theme_classic() +
+  # Changing colours
+  scale_fill_manual(values = c("#e76f51", "#264653")) +
+  scale_color_manual(values=c("#e76f51", "#264653"))
+
+# Looking at plot
+sex_plot
+```
+
+```{r, message=FALSE, fig.cap = "Figure 4. Scatterplot with a fitted line showing a weak positive relationship between mean sNAO and weight, coloured by sex."}
+# Plotting the data
+snao_weight_plot <- ggplot(snao_mass_data, aes(x=mean_snao, y=weight_kg, col=sex)) +
+  # Specifying for points, making these transparent
+  geom_point(alpha=0.05) + 
+  # Adding fitted linear regression line
+  geom_smooth(method = "lm") +
+  # Adding labels
+  xlab("Mean sNAO") + ylab("Weight (KG)") +
+  # Setting theme
+  theme_classic() +
+  # Changing colours
+  scale_fill_manual(values = c("#e76f51", "#264653")) +
+  scale_color_manual(values=c("#e76f51", "#264653"))
+
+# Visualising plot
+snao_weight_plot
+```
+
+### Is the data normally distributed?
+
+```{r, fig.cap= "Figure 5. Histogram of recorded weight values."}
+# Before modeling, the error structure needs to be identified. As the response variable `weight` is continuous, an appropriate error distribution for the model will likely be gaussian (normal)
+
+# Some plots to check whether the data follows a normal distribution:
+
+# Plotting a histogram of weight_kg
+ggplot(snao_mass_data, aes(x=weight_kg)) +
+  # Changing histogram parameters for bin width and transparency (alpha), default position
+  geom_histogram(binwidth = 0.5, alpha = 0.8, position="identity") +
+  # Setting theme
+  theme_classic() +
+  # Adding a vertical line at the mean to highlight skew in data
+  geom_vline(aes(xintercept=mean(weight_kg)), colour = "#e76f51", linetype = "dashed", linewidth=1.2)
+
+# The histogram (Figure 5) has a right skew suggesting the data is not normally distributed
+````
+
+```{r, message=FALSE, fig.cap="Figure 6. A QQ plot to test for normal distribution of the weight data, with sex differences."}
+# Testing for normal distribution by plotting a Quantile-Quantile plot with sex separated
+ggqqplot(snao_mass_data, x="weight_kg", color="sex", palette = c("#e76f51", "#264653"))
+
+# The data points in the `ggqqplot` (Figure 6) do not closely follow the lines. The data are NOT normally distributed.
+````
+
+
+### Does the data follow another distribution?
+
+```{r, message=FALSE, fig.cap="Figure 7. Plot of data against gamma distribution."}
+# The `fitdistrplus` package can be used here to easily compare and visualise whether the data conforms to another distribution/testing how transformations affect the error structure. Another distribution for continuous and positive data is the Gamma distribution.
+
+# Loading the fitdistrplus package
+library(fitdistrplus)
+
+# Plotting data against a gamma distribution
+fit_gamma <- fitdist(snao_mass_data$weight_kg, distr = "gamma")
+
+# Visualising the fit 
+plot(fit_gamma)
+
+# The tail end of the QQ-plot (Figure 7) suggests that the data does not follow a gamma distribution.
+```
+### Normalising the data
+```{r}
+# As data does not follow a gamma or normal distribution, we can transform the data to fit a normal distribution.
+
+# Here, the package `bestNormalize` was used to estimate the best normalising transformation. 
+
+# Loading package 'bestNormalize'
+library(bestNormalize)
+
+# Creating an object to see which transformation 'bestNormalize' chooses
+bn_mass <- bestNormalize(snao_mass_data$weight_kg, allow_lambert_s = TRUE)
+bn_mass
+# Suggests the orderNorm transformation
+```
+
+```{r}
+# Applying the transformation 'ordernorm' to weight_kg, 
+ordernorm_mass <- orderNorm(snao_mass_data$weight_kg)
+
+# Creating a new column 'norm_Weight' with the applied transformation
+snao_mass_data$weight_norm <- predict(ordernorm_mass)
+```
+
+```{r, message=FALSE, fig.cap="Figure 8. Plot visualising the distribution of the orderNorm transformed data against a normal distribution."}
+# Checking the fit of the transformed data against a normal distribution
+fit_norm <- fitdist(snao_mass_data$weight_norm, "norm")
+plot(fit_norm) # plotting the fit
+
+# The transformed data follows a normal distribution.
+```
+
+# Modelling the data
+
+**Variables included:**    
+- 2 categorical predictors: `age` and `sex`  
+- 1 continuous predictor: `mean_snao`  
+- 1 continuous response variable: `weight_kg`   
+
+**Random effects included:**    
+- Each `ID` is nested within `site` to account for how weight from the same sheep is not independent and accounts for potential variation between different sites  
+- `year` is added as a crossed random effect to account for how sites are measured >1 each year   
+
+```{r}
+# Inclusion of predictor variables based on whether plots suggested a relationship with weight.
+
+# Performing a multiple linear regression is appropriate as we're interested in the effects of multiple independent variables on one dependent variable, taken from time series data. Fitting a linear mixed model will allow the model to account for variation in the data caused by random effects.
+
+# Loading package glmmTMB
+library(glmmTMB)
+
+# Fitting a random effects model (linear mixed model)
+# Adding interaction between mean_snao and age, as age could strongly determine how mean_snao might affect weight
+sheep_mod <- glmmTMB(weight_kg ~ mean_snao * 
+                      age +
+                      sex +
+                      # Random effects included using random intercepts to control for non-independence: site, ID and year
+                      (1|site/ID) + (1|year),
+                data=snao_mass_data,
+                # Using the default family and link parameters, writing out for clarity 
+                family="gaussian"(link="identity"))
+```
+
+## Assessing model fit
+
+```{r}
+# Loading mumin package (allows for easier multi-model inference)
+library(MuMIn)
+
+# Calculating rsquared for sheep_mod to see how well the model explains variance in data
+r.squaredGLMM(sheep_mod)
+
+# This output suggests that ~97% of the variance in weight can be explained by the model, with random effects accounting for ~9% of the variance explained.
+```
+
+```{r, fig.cap="Figure 9. Residual diagnostic plots for sheep_mod, shows a relatively good fit despite outliers."}
+# Using DHARMa to simulate residuals and plotting residual diagnostic plots
+
+# Load DHARMa
+library(DHARMa)
+
+# Simulating residuals from the model - setting the number of simulations to 1000 
+sheep_mod_simres <- simulateResiduals(sheep_mod, n = 1000)
+
+# Plot out the residuals
+plot(sheep_mod_simres)
+````
+
+```{r}
+# As the same population of sheep are sampled each year then there could be temporal correlations in the data. This was tested for.
+
+# Have >1 observation per year so need to aggregate residuals by time (which in this case is year)
+sheep_mod_rec <- recalculateResiduals(sheep_mod_simres, group=snao_mass_data$year)
+
+# Performing a test for temporal autocorrelation on the (recalculated) simulated residuals
+testTemporalAutocorrelation(sheep_mod_rec,
+                            time = unique(snao_mass_data$year))
+
+# Non-significant so don't need to adjust the model.
+```
+
+```{r, fig.cap="Figure 10. Observed vs predicted values for sheep_mod, points appear to closely follow the line."}
+
+# Final visual check of observed vs predicted values:
+
+# Add in the predicted values from the model:
+snao_mass_data$predicted <- predict(sheep_mod,
+                                     type = "response")
+
+# Plot the predicted against the observed
+ggplot(snao_mass_data, aes(x = weight_kg,
+                            y = predicted)) +
+  # Specifying for points 
+  geom_point(col="darkgrey") +
+  # Adding line and aesthetics
+  geom_abline(slope = 1, col="#e76f51", size=1) +
+  # Setting theme
+  theme_classic() +
+  # Adding labels
+  xlab("Observed") +
+  ylab("Predicted")
+
+# This model is a good fit relative to alternative models.
+```
+
+## Comparing to alternative models
+
+```{r}
+# The normalized data "weight_norm" was not used due to poor fitting residuals.
+
+# Fitting a random effects model using the orderNorm transformed weight data as the response variable (whilst keeping all other parameters the same to original model - sheep_mod)
+mod_norm <- glmmTMB(weight_norm ~ mean_snao *
+                      age +
+                      sex +
+                      (1|site/ID) +
+                      (1|year),
+                data=snao_mass_data,
+                family="gaussian"(link="identity"))
+```
+
+```{r, fig.cap="Figure 11. Residual diagnostic plots for the transformed (orderNorm) data."}
+# Loading package DHARMa
+library(DHARMa)
+
+# Simulate the residuals from the model
+# Setting the number of simulations to 1000 
+mod_norm_sim <- simulateResiduals(mod_norm, n = 1000)
+
+# Plotting the simulated residuals
+plot(mod_norm_sim)
+
+# Normalising the data likely amplifies outliers/errors in the data.
+# Plot shows significant deviation for all tests.
+````
+
+### Other models
+```{r}
+# Fitting a model without random effects
+mod_fixed_only <- glmmTMB(weight_kg ~ mean_snao *
+                     age +
+                     sex, # no random effects
+                data=snao_mass_data,
+                family="gaussian"(link="identity"))
+```
+
+```{r}
+# Fitting a random effects model using link function: log
+mod_link_log <- glmmTMB(weight_kg ~ mean_snao *
+                     age + 
+                     sex +
+                     (1|site/ID) +
+                     (1|year),
+                data=snao_mass_data,
+                family="gaussian"(link="log")) # Link function to log
+```
+
+```{r}
+# Fitting a random effects model using scale() function to account for continuous predictors with different scales
+mod_scale <- glmmTMB(weight_kg ~ scale(mean_snao) * 
+                      scale(age) + # Adding scale to continuous predictors
+                      sex +
+                      (1|site/ID) +
+                      (1|year),
+                data=snao_mass_data,
+                family="gaussian"(link="identity"))
+```
+
+```{r}
+# Comparing these other models using AIC metric for goodness of fit, (the lower the AIC, the better the model might be):
+
+# Performing an anova on the different models, using AIC as a statistic to compare fit
+anova(sheep_mod, mod_scale, mod_fixed_only, mod_link_log)
+
+# According the AIC, the best models are the original and scaled (N.B. no differences were observed between original and scaled in the diagnostic plots).
+```
+
+# Interpreting results
+
+```{r}
+# Printing out summary of chosen model for interpretation
+summary(sheep_mod)
+```
+Significant values in the `Pr(>|z|)` column for `age` and `sex` suggest that these predictor variables have an effect on weight that is not due to chance. The estimate for age (`0.49..`) suggests that age has a positive relationship with weight.
+
+The negative estimate for `sexm` highlights within group differences with males weighing less than females. `mean_snao` and `age` do not have a significant interaction, and the slight positive relationship between `mean_snao` and `weight` (Figure 4) is likely due to chance (non-significant).
+
+## Conclusions
+
+Age and sex determine the mass of Soay sheep in this population, with sheep gaining mass as they age and female sheep weighing more than male sheep (Figure 13). The null hypothesis is accepted as sNAO does not show evidence of having a significant effect on the body mass (weight) of sheep (Figure 12).
+
+```{r, fig.cap="Figure 12. Plot of (standardized) estimates of the fixed effects in sheep_mod."}
+# The coefficients (excluding random effects) were visualised using `sjPlot`:
+
+# Loading package sjPlot
+library(sjPlot)
+
+# Plotting the coefficients of the model
+estimate_plot <- plot_model(sheep_mod, colors = "system", 
+                 vline.color = "grey",  # Setting colours for points and line at 0
+                 # Sorting estimates from highest to lowest value
+                 sort.est = TRUE, 
+                 # Showing value labels with estimate values, asterisks suggests significance 
+                 show.values = TRUE, 
+                 # Standardizes coefficients (re scaling the estimates for visual clarity)
+                 type = "std",
+                 # No title
+                 title=(""))
+
+# Plot with classic theme
+estimate_plot + theme_classic()
+```
+
+```{r, message=FALSE, fig.cap="Figure 13. Multiple regression model plot of the effects of the predictor variables age and sex, on the response, weight, in a Soay sheep population."}
+# Loading package ggeffects
+library(ggeffects)
+
+# `ggpredict` function for visualising multiple regression models, predicting the age and sex effects
+my_df <- ggpredict(sheep_mod, terms=c("age", "sex"), allow.new.levels=TRUE)
+
+# Plotting the significant effects (age and sex)
+plot(my_df) + 
+  # Adding labels
+  ylab("Weight (KG)") + 
+  xlab("Age") +
+  # Removing grid lines by applying classic theme 
+  theme_classic() +
+  # Replacing default title with nothing
+  ggtitle("") +
+  # Adding custom colours
+  scale_fill_manual(values = c("#e76f51", "#264653")) +
+  scale_color_manual(values=c("#e76f51", "#264653"))
+```
