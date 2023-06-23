@@ -1,7 +1,7 @@
 # Programming in R: Project
 Analysing data to determine the determinants of body mass on a species of Soay Sheep (data has been randomly manipulated)
 
-HTML Document can be viewed by following this link: https://lucaswalkr.github.io/R-population-analysis/markdown.html
+View the project here: https://lucaswalkr.github.io/R-population-analysis/markdown.html
 
 ## Aims:
 - To show which factors in the data determine the body mass of individuals within a population of Soay sheep (Ovis aries)
